@@ -1,0 +1,88 @@
+rules_version = '2';
+
+// STARTING POINT - read SECURITY-NOTES in the chat before publishing.
+// Test in Firebase Console > Firestore > Rules > "Rules Playground" first.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == "active";
+    }
+
+    // ---------- USERS ----------
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+
+      // new accounts can only be created as normal active customers
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role == "customer"
+        && request.resource.data.status == "active";
+
+      // owner can edit profile but NOT role/status; admin can edit anything
+      allow update: if isAdmin() || (
+        signedIn() && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- PUBLIC CATALOG ----------
+    match /products/{id} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      // customers may only change stock (checkout / cancel order)
+      allow update: if isAdmin()
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(["stock"]);
+    }
+
+    match /categories/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /banners/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---------- ORDERS ----------
+    match /orders/{id} {
+      allow create: if request.resource.data.orderStatus == "Pending"
+        && (request.resource.data.customerId == null
+            || (signedIn() && request.resource.data.customerId == request.auth.uid));
+
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+
+      allow update: if isAdmin()
+        || (signedIn() && resource.data.customerId == request.auth.uid);
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- CONTACT MESSAGES ----------
+    match /messages/{id} {
+      allow create: if true;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ---------- ADMIN ONLY ----------
+    match /inventoryHistory/{id} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
